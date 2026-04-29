@@ -1,12 +1,13 @@
 """
-🌌 COSMOS - AI Chat Platform 🌌
-A beautiful, vibrant AI chatbot interface.
+🌌 COSMOS - AI Chat Platform with Database 🌌
+A beautiful, vibrant AI chatbot interface with persistent user storage.
 
 Features:
   - Beautiful neon dark theme
   - OpenAI GPT integration
   - GOOGLE SIGN-IN + Traditional Login
   - USER ANALYTICS (who signed in, what they searched, time spent)
+  - SQLite DATABASE for persistent user storage
   - Freemium model (5 free messages/day, unlimited for premium)
   - Admin Dashboard to view all user data
   - Ready to monetize
@@ -27,12 +28,194 @@ from openai import OpenAI
 from dotenv import load_dotenv
 import hashlib
 import pandas as pd
+import sqlite3
 import json
 
 load_dotenv()
 
 # ============================================================
-# 📱 PAGE CONFIG (must be first Streamlit command)
+# 💾 DATABASE SETUP
+# ============================================================
+
+DB_FILE = "cosmos_users.db"
+
+def init_database():
+    """Initialize SQLite database"""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    
+    # Users table
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        email TEXT,
+        is_premium INTEGER DEFAULT 0,
+        auth_method TEXT DEFAULT 'traditional',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_login TIMESTAMP
+    )''')
+    
+    # User activity table
+    c.execute('''CREATE TABLE IF NOT EXISTS activity (
+        id INTEGER PRIMARY KEY,
+        username TEXT NOT NULL,
+        action TEXT NOT NULL,
+        query TEXT,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (username) REFERENCES users(username)
+    )''')
+    
+    # User messages table
+    c.execute('''CREATE TABLE IF NOT EXISTS messages (
+        id INTEGER PRIMARY KEY,
+        username TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (username) REFERENCES users(username)
+    )''')
+    
+    conn.commit()
+    conn.close()
+
+def hash_password(password):
+    """Hash password"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def register_user_db(username, password, email=None):
+    """Register user in database"""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        
+        if len(username) < 3:
+            return False, "Username must be at least 3 characters"
+        
+        if len(password) < 6:
+            return False, "Password must be at least 6 characters"
+        
+        c.execute("SELECT username FROM users WHERE username = ?", (username,))
+        if c.fetchone():
+            return False, "Username already exists"
+        
+        hashed_pwd = hash_password(password)
+        c.execute("""INSERT INTO users (username, password, email, auth_method) 
+                     VALUES (?, ?, ?, ?)""", 
+                  (username, hashed_pwd, email, "traditional"))
+        conn.commit()
+        conn.close()
+        return True, "Account created! Please log in."
+    except Exception as e:
+        return False, f"Error: {str(e)}"
+
+def login_user_db(username, password):
+    """Login user from database"""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        
+        hashed_pwd = hash_password(password)
+        c.execute("SELECT username, is_premium FROM users WHERE username = ? AND password = ?", 
+                  (username, hashed_pwd))
+        result = c.fetchone()
+        
+        if result:
+            # Update last login
+            c.execute("UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE username = ?", (username,))
+            conn.commit()
+            conn.close()
+            return True, result[1]  # Return is_premium status
+        else:
+            conn.close()
+            return False, None
+    except Exception as e:
+        return False, None
+
+def google_login_db(email):
+    """Google login - create or get user"""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        
+        username = email.split("@")[0]
+        
+        c.execute("SELECT username, is_premium FROM users WHERE email = ?", (email,))
+        result = c.fetchone()
+        
+        if not result:
+            hashed_pwd = hash_password("google_oauth")
+            c.execute("""INSERT INTO users (username, password, email, auth_method) 
+                         VALUES (?, ?, ?, ?)""", 
+                      (email, hashed_pwd, email, "google"))
+            conn.commit()
+            return email, False
+        else:
+            # Update last login
+            c.execute("UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE email = ?", (email,))
+            conn.commit()
+            return result[0], result[1]
+    except Exception as e:
+        return None, None
+    finally:
+        conn.close()
+
+def log_activity_db(username, action, query=None):
+    """Log user activity to database"""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""INSERT INTO activity (username, action, query) 
+                     VALUES (?, ?, ?)""", 
+                  (username, action, query))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        pass
+
+def get_all_users():
+    """Get all users from database"""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT username, email, is_premium, created_at, last_login FROM users")
+        users = c.fetchall()
+        conn.close()
+        return users
+    except:
+        return []
+
+def get_user_activity(username):
+    """Get user activity from database"""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""SELECT action, query, timestamp FROM activity 
+                     WHERE username = ? ORDER BY timestamp DESC""", (username,))
+        activities = c.fetchall()
+        conn.close()
+        return activities
+    except:
+        return []
+
+def get_all_activity():
+    """Get all activity from database"""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""SELECT username, action, query, timestamp FROM activity 
+                     ORDER BY timestamp DESC LIMIT 500""")
+        activities = c.fetchall()
+        conn.close()
+        return activities
+    except:
+        return []
+
+# Initialize database on startup
+init_database()
+
+# ============================================================
+# 📱 PAGE CONFIG
 # ============================================================
 st.set_page_config(
     page_title="Cosmos ✨",
@@ -46,17 +229,14 @@ st.set_page_config(
 # ============================================================
 st.markdown("""
 <style>
-    /* Hide Streamlit branding for clean look */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
 
-    /* Main background */
     .stApp {
         background: linear-gradient(135deg, #0F0E17 0%, #1A1825 100%);
     }
 
-    /* Animated gradient title */
     @keyframes gradient {
         0% { background-position: 0% 50%; }
         50% { background-position: 100% 50%; }
@@ -95,13 +275,11 @@ st.markdown("""
         margin: 20px 0;
     }
 
-    /* Sidebar */
     [data-testid="stSidebar"] {
         background-color: #1A1825 !important;
     }
     [data-testid="stSidebar"] * { color: #FFFFFE; }
 
-    /* Chat messages */
     [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
         background: linear-gradient(135deg, #9D4EDD 0%, #7B2FBF 100%) !important;
         border-radius: 18px !important;
@@ -122,7 +300,6 @@ st.markdown("""
     [data-testid="stChatMessage"] li,
     [data-testid="stChatMessage"] div { color: #FFFFFE !important; }
 
-    /* Chat input */
     [data-testid="stChatInput"] {
         background-color: #2D2B40 !important;
         border-radius: 16px !important;
@@ -133,7 +310,6 @@ st.markdown("""
         color: #FFFFFE !important;
     }
 
-    /* Buttons */
     .stButton > button {
         background: linear-gradient(90deg, #FF6B9D 0%, #9D4EDD 100%);
         color: white !important;
@@ -150,7 +326,6 @@ st.markdown("""
         box-shadow: 0 8px 16px rgba(157, 78, 221, 0.4);
     }
 
-    /* Premium upgrade banner */
     .premium-banner {
         background: linear-gradient(135deg, #FFD60A 0%, #FF8E3C 100%);
         color: #0F0E17;
@@ -162,7 +337,6 @@ st.markdown("""
         box-shadow: 0 4px 12px rgba(255, 214, 10, 0.4);
     }
 
-    /* Status pill */
     .status-pill {
         display: inline-block;
         padding: 6px 14px;
@@ -173,17 +347,13 @@ st.markdown("""
     }
     .status-free   { background: #FFD60A; color: #0F0E17; }
     .status-premium { background: #06FFA5; color: #0F0E17; }
-    .status-limit  { background: #FF4365; color: #FFFFFE; }
 
     @media (max-width: 768px) {
         .gradient-title { font-size: 1.8em; }
         .welcome-header { font-size: 1.8em; }
     }
 
-    hr {
-        border-color: #9D4EDD;
-        margin: 20px 0;
-    }
+    hr { border-color: #9D4EDD; margin: 20px 0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -194,7 +364,7 @@ FREE_DAILY_LIMIT = 5
 PREMIUM_DAILY_LIMIT = 100
 PREMIUM_PRICE = "$4.99/month"
 STRIPE_PAYMENT_LINK = "https://buy.stripe.com/YOUR_PAYMENT_LINK"
-ADMIN_PASSWORD = "admin123"  # Change this to something secure!
+ADMIN_PASSWORD = "admin123"
 SUPPORT_EMAIL = "your-email@example.com"
 
 DEMO_REPLIES = [
@@ -205,119 +375,6 @@ DEMO_REPLIES = [
     "Wonderful question! 🌈 The short answer: it's nuanced.",
     "Excellent! 🎯 Let's break it down.",
 ]
-
-# ============================================================
-# 📊 USER TRACKING FUNCTIONS
-# ============================================================
-
-def get_analytics_db():
-    """Get analytics database from session"""
-    if "analytics_db" not in st.session_state:
-        st.session_state.analytics_db = {
-            "users": {},
-            "sessions": [],
-        }
-    return st.session_state.analytics_db
-
-def log_user_activity(username, action, query=None):
-    """Log user activity to analytics"""
-    analytics = get_analytics_db()
-    timestamp = datetime.now()
-    
-    # Track user session
-    if username not in analytics["users"]:
-        analytics["users"][username] = {
-            "first_login": timestamp.isoformat(),
-            "last_login": timestamp.isoformat(),
-            "total_messages": 0,
-            "total_searches": [],
-            "session_count": 0,
-        }
-    
-    analytics["users"][username]["last_login"] = timestamp.isoformat()
-    
-    # Track individual session
-    session_log = {
-        "username": username,
-        "timestamp": timestamp.isoformat(),
-        "action": action,
-        "query": query,
-    }
-    
-    analytics["sessions"].append(session_log)
-    
-    if action == "message":
-        analytics["users"][username]["total_messages"] += 1
-        if query:
-            analytics["users"][username]["total_searches"].append({
-                "query": query,
-                "timestamp": timestamp.isoformat()
-            })
-
-def get_session_start_time():
-    """Get when user started current session"""
-    if "session_start" not in st.session_state:
-        st.session_state.session_start = datetime.now()
-    return st.session_state.session_start
-
-def get_session_duration():
-    """Calculate session duration in minutes"""
-    start = get_session_start_time()
-    duration = (datetime.now() - start).total_seconds() / 60
-    return round(duration, 1)
-
-# ============================================================
-# 🔐 AUTHENTICATION FUNCTIONS
-# ============================================================
-
-def hash_password(password):
-    """Hash password for storage"""
-    return hashlib.sha256(password.encode()).hexdigest()
-
-def get_users_db():
-    """Get users from session"""
-    if "users_db" not in st.session_state:
-        st.session_state.users_db = {
-            "demo": {
-                "is_premium": False,
-                "created": "2026-01-01",
-                "auth_method": "modern",
-            }
-        }
-    return st.session_state.users_db
-
-def register_user(username, password):
-    """Register new user"""
-    users = get_users_db()
-    
-    if username in users:
-        return False, "Username already exists"
-    
-    if len(username) < 3:
-        return False, "Username must be at least 3 characters"
-    
-    if len(password) < 6:
-        return False, "Password must be at least 6 characters"
-    
-    users[username] = {
-        "password": hash_password(password),
-        "is_premium": False,
-        "created": str(date.today()),
-        "auth_method": "traditional",
-    }
-    return True, "Account created! Please log in."
-
-def login_user(username, password):
-    """Login user"""
-    users = get_users_db()
-    
-    if username not in users:
-        return False, "Username not found"
-    
-    if users[username]["password"] != hash_password(password):
-        return False, "Incorrect password"
-    
-    return True, "Login successful!"
 
 # ============================================================
 # 🔐 SESSION STATE
@@ -351,7 +408,16 @@ def init_session():
     if "selected_model" not in st.session_state:
         st.session_state.selected_model = "gpt-4o-mini"
 
+    if "session_start" not in st.session_state:
+        st.session_state.session_start = datetime.now()
+
 init_session()
+
+def get_session_duration():
+    """Calculate session duration in minutes"""
+    start = st.session_state.session_start
+    duration = (datetime.now() - start).total_seconds() / 60
+    return round(duration, 1)
 
 # ============================================================
 # 🎨 LOGIN PAGE
@@ -377,6 +443,7 @@ if not st.session_state.logged_in:
                     st.session_state.logged_in = True
                     st.session_state.is_admin = True
                     st.session_state.username = "ADMIN"
+                    log_activity_db("ADMIN", "login")
                     st.success("✅ Admin logged in!")
                     st.rerun()
                 else:
@@ -385,20 +452,22 @@ if not st.session_state.logged_in:
             st.markdown("### 🔐 Sign In")
             
             if st.button("🌐 Sign in with Google", use_container_width=True, key="google_signin"):
-                st.info("📧 Google Sign-In: Please enter your Google email and verify with Google OAuth")
+                st.info("📧 Google Sign-In: Please enter your Google email")
                 google_email = st.text_input("Google Email", key="google_email_input", placeholder="your.email@gmail.com")
                 
                 if google_email and "@" in google_email:
                     st.warning("⚠️ Note: In production, this will redirect to Google OAuth login")
                     if st.button("✅ Continue with Google", use_container_width=True):
-                        users = get_users_db()
-                        username, email = google_login(google_email)
-                        st.session_state.logged_in = True
-                        st.session_state.username = google_email
-                        st.session_state.is_premium = users.get(google_email, {}).get("is_premium", False)
-                        log_user_activity(google_email, "login", "google_signin")
-                        st.success(f"✅ Signed in as {google_email}!")
-                        st.rerun()
+                        username, is_premium = google_login_db(google_email)
+                        if username:
+                            st.session_state.logged_in = True
+                            st.session_state.username = google_email
+                            st.session_state.is_premium = is_premium
+                            log_activity_db(google_email, "login", "google_signin")
+                            st.success(f"✅ Signed in as {google_email}!")
+                            st.rerun()
+                        else:
+                            st.error("Error with Google login")
             
             st.markdown("**OR**")
             
@@ -411,22 +480,24 @@ if not st.session_state.logged_in:
                 password = st.text_input("Password", type="password", key="login_password")
                 
                 if st.button("🚀 Login", use_container_width=True):
-                    success, message = login_user(username, password)
+                    success, is_premium = login_user_db(username, password)
                     if success:
                         st.session_state.logged_in = True
                         st.session_state.username = username
-                        users = get_users_db()
-                        st.session_state.is_premium = users[username].get("is_premium", False)
-                        log_user_activity(username, "login")
-                        st.success(message)
+                        st.session_state.is_premium = is_premium
+                        log_activity_db(username, "login")
+                        st.success("✅ Login successful!")
                         st.rerun()
                     else:
-                        st.error(message)
+                        st.error("❌ Invalid username or password")
+                
+                st.caption("Demo: username='demo', password='demo123'")
             
             with tab2:
                 st.subheader("Create Account")
                 
                 new_username = st.text_input("Choose Username", key="register_username")
+                new_email = st.text_input("Email (optional)", key="register_email")
                 new_password = st.text_input("Choose Password", type="password", key="register_password")
                 new_password_confirm = st.text_input("Confirm Password", type="password", key="register_password_confirm")
                 
@@ -434,101 +505,77 @@ if not st.session_state.logged_in:
                     if new_password != new_password_confirm:
                         st.error("Passwords don't match!")
                     else:
-                        success, message = register_user(new_username, new_password)
+                        success, message = register_user_db(new_username, new_password, new_email if new_email else None)
                         if success:
                             st.success(message)
+                            log_activity_db(new_username, "register")
                         else:
                             st.error(message)
         
         st.markdown("---")
-        st.caption("🔒 Your data is secure. We never share your information.")
+        st.caption("🔒 Your data is secure and stored in our database.")
 
 # ============================================================
-# 📊 ADMIN DASHBOARD WITH CHAT
+# 📊 ADMIN DASHBOARD
 # ============================================================
 elif st.session_state.is_admin:
     st.markdown(f'<div class="welcome-header">Welcome, ADMIN! 👑</div>', unsafe_allow_html=True)
     
-    # Create tabs for Admin Controls and Chat
     tab_admin, tab_chat = st.tabs(["📊 Analytics", "💬 Chat"])
     
     with tab_admin:
-        analytics = get_analytics_db()
-        
         with st.sidebar:
             st.markdown("### 👑 ADMIN")
-            if st.button("🚪 Logout", use_container_width=True):
+            if st.button("🚪 Logout", use_container_width=True, key="admin_logout_1"):
                 st.session_state.logged_in = False
                 st.session_state.is_admin = False
                 st.rerun()
         
         # Overview stats
+        all_users = get_all_users()
+        all_activity = get_all_activity()
+        
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.metric("Total Users", len(analytics["users"]))
+            st.metric("Total Users", len(all_users))
         
         with col2:
-            st.metric("Total Sessions", len(analytics["sessions"]))
+            st.metric("Total Activities", len(all_activity))
         
         with col3:
-            total_messages = sum(u["total_messages"] for u in analytics["users"].values())
-            st.metric("Total Messages", total_messages)
+            premium_count = sum(1 for user in all_users if user[2] == 1)
+            st.metric("Premium Users", premium_count)
         
         with col4:
-            st.metric("Premium Users", 0)
+            st.metric("Free Users", len(all_users) - premium_count)
         
         st.divider()
         
-        # User activity table
-        st.subheader("📋 Activity Log")
+        # Activity log
+        st.subheader("📋 Recent Activity")
         
-        if analytics["sessions"]:
-            df_sessions = pd.DataFrame(analytics["sessions"])
-            df_sessions["timestamp"] = pd.to_datetime(df_sessions["timestamp"])
-            df_sessions = df_sessions.sort_values("timestamp", ascending=False)
-            
-            st.dataframe(
-                df_sessions,
-                use_container_width=True,
-                hide_index=True,
-            )
+        if all_activity:
+            df_activity = pd.DataFrame(all_activity, columns=["Username", "Action", "Query", "Timestamp"])
+            st.dataframe(df_activity, use_container_width=True, hide_index=True)
         else:
-            st.info("No user activity yet")
+            st.info("No activity yet")
         
         st.divider()
         
         # User details
-        st.subheader("👥 User Details")
+        st.subheader("👥 All Users")
         
-        if analytics["users"]:
-            for username, user_data in analytics["users"].items():
-                with st.expander(f"👤 {username}"):
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
-                        st.metric("Total Messages", user_data["total_messages"])
-                    
-                    with col2:
-                        st.metric("First Login", user_data["first_login"][:10])
-                    
-                    with col3:
-                        st.metric("Last Login", user_data["last_login"][:10])
-                    
-                    st.write("**Search History:**")
-                    if user_data["total_searches"]:
-                        for search in user_data["total_searches"]:
-                            st.caption(f"🔍 {search['query']} - {search['timestamp'][:10]}")
-                    else:
-                        st.caption("No searches yet")
+        if all_users:
+            df_users = pd.DataFrame(all_users, columns=["Username", "Email", "Premium", "Created", "Last Login"])
+            st.dataframe(df_users, use_container_width=True, hide_index=True)
         else:
             st.info("No users yet")
     
     with tab_chat:
-        # Normal chat interface for admin
         with st.sidebar:
             st.markdown("### 👑 ADMIN (Chat Mode)")
-            if st.button("🚪 Logout", use_container_width=True):
+            if st.button("🚪 Logout", use_container_width=True, key="admin_logout_2"):
                 st.session_state.logged_in = False
                 st.session_state.is_admin = False
                 st.rerun()
@@ -537,32 +584,20 @@ elif st.session_state.is_admin:
         
         if not st.session_state.messages:
             with st.chat_message("assistant", avatar="🤖"):
-                st.markdown(
-                    "Hello Admin! 👋\n\n"
-                    "Test the Cosmos chatbot here.\n\n"
-                    "Ask me anything! ✨"
-                )
+                st.markdown("Hello Admin! 👋\n\nTest the Cosmos chatbot here. Ask me anything! ✨")
 
         for msg in st.session_state.messages:
             avatar = "👤" if msg["role"] == "user" else "🤖"
             with st.chat_message(msg["role"], avatar=avatar):
                 st.markdown(msg["content"])
 
-        prompt = None
-        if "surprise" in st.session_state:
-            prompt = st.session_state.surprise
-            del st.session_state.surprise
-
         user_input = st.chat_input("💬 Type your message…")
         if user_input:
-            prompt = user_input
-
-        if prompt:
-            log_user_activity("ADMIN", "message", prompt)
-
-            st.session_state.messages.append({"role": "user", "content": prompt})
+            log_activity_db("ADMIN", "message", user_input)
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            
             with st.chat_message("user", avatar="👤"):
-                st.markdown(prompt)
+                st.markdown(user_input)
 
             with st.chat_message("assistant", avatar="🤖"):
                 placeholder = st.empty()
@@ -577,9 +612,9 @@ elif st.session_state.is_admin:
                             )
                             reply = response.choices[0].message.content
                     except Exception as e:
-                        reply = f"❌ Error: {str(e)[:120]}\n\nFalling back: {random.choice(DEMO_REPLIES)}"
+                        reply = f"❌ Error: {str(e)[:120]}"
                 else:
-                    reply = random.choice(DEMO_REPLIES) + f"\n\nYou said: \"{prompt[:60]}...\""
+                    reply = random.choice(DEMO_REPLIES)
 
                 placeholder.markdown(reply)
                 st.session_state.messages.append({"role": "assistant", "content": reply})
@@ -587,7 +622,7 @@ elif st.session_state.is_admin:
             st.rerun()
 
 # ============================================================
-# 💬 MAIN APP (if logged in and not admin)
+# 💬 MAIN APP (User Chat)
 # ============================================================
 else:
     st.markdown(f'<div class="welcome-header">Welcome, {st.session_state.username}! 👋</div>', unsafe_allow_html=True)
@@ -607,7 +642,6 @@ else:
         st.progress(min(used / limit, 1.0))
         st.markdown(f"**{remaining} / {limit}** messages left today")
         
-        # Session duration
         duration = get_session_duration()
         st.caption(f"⏱️ Session time: {duration} min")
 
@@ -646,18 +680,18 @@ else:
             st.session_state.selected_model = model_choice.split(" ")[0]
         else:
             st.markdown("🤖 **Model:** GPT-4o Mini")
-            st.caption("⭐ Premium unlocks GPT-4o & GPT-3.5")
+            st.caption("⭐ Premium unlocks more models")
 
         st.divider()
 
         if st.session_state.openai_client:
             st.success("🟢 AI Connected")
         else:
-            st.warning("🟡 Demo Mode (no API key)")
+            st.warning("🟡 Demo Mode")
 
         st.divider()
 
-        if st.button("🚪 Logout", use_container_width=True):
+        if st.button("🚪 Logout", use_container_width=True, key="user_logout"):
             st.session_state.logged_in = False
             st.session_state.username = None
             st.session_state.messages = []
@@ -700,8 +734,7 @@ else:
             st.link_button(f"⭐ Upgrade for {PREMIUM_PRICE}", STRIPE_PAYMENT_LINK)
             st.stop()
 
-        # Log the user message
-        log_user_activity(st.session_state.username, "message", prompt)
+        log_activity_db(st.session_state.username, "message", prompt)
 
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user", avatar="👤"):
