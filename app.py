@@ -490,8 +490,6 @@ if not st.session_state.logged_in:
                         st.rerun()
                     else:
                         st.error("❌ Invalid username or password")
-                
-                st.caption("Demo: username='demo', password='demo123'")
             
             with tab2:
                 st.subheader("Create Account")
