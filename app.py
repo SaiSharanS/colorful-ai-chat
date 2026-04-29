@@ -460,7 +460,7 @@ elif st.session_state.is_admin:
         
         with st.sidebar:
             st.markdown("### 👑 ADMIN")
-            if st.button("🚪 Logout", use_container_width=True, key="admin_logout_1"):
+            if st.button("🚪 Logout", use_container_width=True):
                 st.session_state.logged_in = False
                 st.session_state.is_admin = False
                 st.rerun()
@@ -531,7 +531,7 @@ elif st.session_state.is_admin:
         # Normal chat interface for admin
         with st.sidebar:
             st.markdown("### 👑 ADMIN (Chat Mode)")
-            if st.button("🚪 Logout", use_container_width=True, key="admin_logout_2"):
+            if st.button("🚪 Logout", use_container_width=True):
                 st.session_state.logged_in = False
                 st.session_state.is_admin = False
                 st.rerun()
@@ -660,7 +660,7 @@ else:
 
         st.divider()
 
-        if st.button("🚪 Logout", use_container_width=True, key="user_logout"):
+        if st.button("🚪 Logout", use_container_width=True):
             st.session_state.logged_in = False
             st.session_state.username = None
             st.session_state.messages = []
@@ -731,4 +731,4 @@ else:
             st.session_state.messages.append({"role": "assistant", "content": reply})
             st.session_state.msg_count_today += 1
 
-        st.rerun()w3
+        st.rerun()
