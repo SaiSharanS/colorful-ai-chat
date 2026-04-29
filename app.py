@@ -279,10 +279,9 @@ def get_users_db():
     if "users_db" not in st.session_state:
         st.session_state.users_db = {
             "demo": {
-                "password": hash_password("demo123"),
                 "is_premium": False,
                 "created": "2026-01-01",
-                "auth_method": "traditional",
+                "auth_method": "modern",
             }
         }
     return st.session_state.users_db
