@@ -13,8 +13,8 @@ env/
 # IDE
 .vscode/
 .idea/
-*.swp
-
+# # # # # # # # # # *.swp
+rk
 # OS
 .DS_Store
 Thumbs.db
