@@ -41,43 +41,46 @@ DB_FILE = "cosmos_users.db"
 
 def init_database():
     """Initialize SQLite database"""
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    
-    # Users table
-    c.execute('''CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY,
-        username TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        email TEXT,
-        is_premium INTEGER DEFAULT 0,
-        auth_method TEXT DEFAULT 'traditional',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        last_login TIMESTAMP
-    )''')
-    
-    # User activity table
-    c.execute('''CREATE TABLE IF NOT EXISTS activity (
-        id INTEGER PRIMARY KEY,
-        username TEXT NOT NULL,
-        action TEXT NOT NULL,
-        query TEXT,
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (username) REFERENCES users(username)
-    )''')
-    
-    # User messages table
-    c.execute('''CREATE TABLE IF NOT EXISTS messages (
-        id INTEGER PRIMARY KEY,
-        username TEXT NOT NULL,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (username) REFERENCES users(username)
-    )''')
-    
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+        c = conn.cursor()
+        
+        # Users table
+        c.execute('''CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            email TEXT,
+            is_premium INTEGER DEFAULT 0,
+            auth_method TEXT DEFAULT 'traditional',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_login TIMESTAMP
+        )''')
+        
+        # User activity table
+        c.execute('''CREATE TABLE IF NOT EXISTS activity (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL,
+            action TEXT NOT NULL,
+            query TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (username) REFERENCES users(username)
+        )''')
+        
+        # User messages table
+        c.execute('''CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (username) REFERENCES users(username)
+        )''')
+        
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        st.error(f"Database error: {e}")
 
 def hash_password(password):
     """Hash password"""
